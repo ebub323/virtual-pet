@@ -26,6 +26,9 @@ class VirtualPetApp:
         self.bars = {}
         self.event_history = []
 
+        # store the id returned from `after` so we can cancel it on restart/exit
+        self.after_id = None
+
         self._build_gui()
         self._update_bars()
         self._start_game_loop()
@@ -69,9 +72,15 @@ class VirtualPetApp:
         self.play_img = ImageTk.PhotoImage(Image.open("assets/play_btn.png").resize((200, 90)))
         self.rest_img = ImageTk.PhotoImage(Image.open("assets/rest_btn.png").resize((200, 90)))
 
-        tk.Button(button_frame, image=self.feed_img, borderwidth=0, command=self._on_feed).grid(row=0, column=0, padx=20)
-        tk.Button(button_frame, image=self.play_img, borderwidth=0, command=self._on_play).grid(row=0, column=1, padx=20)
-        tk.Button(button_frame, image=self.rest_img, borderwidth=0, command=self._on_rest).grid(row=0, column=2, padx=20)
+        # Keep references to action buttons so we can enable/disable on reset
+        self.action_buttons = []
+        btn_feed = tk.Button(button_frame, image=self.feed_img, borderwidth=0, command=self._on_feed)
+        btn_play = tk.Button(button_frame, image=self.play_img, borderwidth=0, command=self._on_play)
+        btn_rest = tk.Button(button_frame, image=self.rest_img, borderwidth=0, command=self._on_rest)
+        btn_feed.grid(row=0, column=0, padx=20)
+        btn_play.grid(row=0, column=1, padx=20)
+        btn_rest.grid(row=0, column=2, padx=20)
+        self.action_buttons.extend([btn_feed, btn_play, btn_rest])
 
         # Event Log
         self.event_label = tk.Label(
@@ -118,7 +127,8 @@ class VirtualPetApp:
 
     # ---------------- GAME LOOP ----------------
     def _start_game_loop(self):
-        self.root.after(TICK_INTERVAL_MS, self._game_tick)
+        # store after id so it can be cancelled when restarting/quitting
+        self.after_id = self.root.after(TICK_INTERVAL_MS, self._game_tick)
 
     def _game_tick(self):
         if not self.pet.alive:
@@ -133,7 +143,8 @@ class VirtualPetApp:
                 self._game_over(msg)
                 return
 
-        self.root.after(TICK_INTERVAL_MS, self._game_tick)
+        # schedule next tick and store id
+        self.after_id = self.root.after(TICK_INTERVAL_MS, self._game_tick)
 
     # ---------------- UPDATES ----------------
     def _update_bars(self):
@@ -150,14 +161,57 @@ class VirtualPetApp:
 
     # ---------------- GAME OVER ----------------
     def _game_over(self, reason):
+        # Cancel the scheduled tick if present to avoid duplicate callbacks
+        try:
+            if self.after_id is not None:
+                self.root.after_cancel(self.after_id)
+        except Exception:
+            pass
+        self.after_id = None
+
         messagebox.showinfo("Game Over", reason)
 
         if messagebox.askyesno("Restart", "Start a new pet?"):
-            self.__init__(self.root)  # recreate the entire app
+            # Perform a clean reset without reconstructing widgets
+            self._reset()
         else:
-            for btn in self.root.winfo_children():
-                if isinstance(btn, tk.Button):
+            # Disable button widgets so no further actions are possible
+            for btn in getattr(self, "action_buttons", []):
+                try:
                     btn.config(state="disabled")
+                except Exception:
+                    continue
+
+    def _reset(self):
+        """Reset the game state without rebuilding the entire GUI.
+
+        Cancels any pending callbacks, creates a fresh `VirtualPet`, clears the
+        event history, updates the status bars and event log, re-enables action
+        buttons, and restarts the game loop.
+        """
+        # Cancel any pending after callback
+        try:
+            if self.after_id is not None:
+                self.root.after_cancel(self.after_id)
+        except Exception:
+            pass
+        self.after_id = None
+
+        # Reset game state
+        self.pet = VirtualPet(self.pet.name)
+        self.event_history = []
+        self.event_label.config(text="EVENT LOG:\nYour pet is ready!")
+        self._update_bars()
+
+        # Re-enable action buttons
+        for btn in getattr(self, "action_buttons", []):
+            try:
+                btn.config(state="normal")
+            except Exception:
+                continue
+
+        # Restart the loop
+        self._start_game_loop()
 import tkinter as tk
 from tkinter import ttk, messagebox
 from PIL import Image, ImageTk
